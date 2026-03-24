@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { getVideoPlayback, saveVideoPlaybackProgress } from "@/lib/api";
+import { buildVideoStreamUrl, getVideoPlayback, saveVideoPlaybackProgress } from "@/lib/api";
 import { RecommendationReason } from "@/types/api";
 
 export type CleanPlayerPlaylistEntry = {
@@ -165,7 +165,13 @@ export function CleanPlayerShell({
         if (cancelled) {
           return;
         }
-        setPlaybackStreamUrl(playback.stream_url);
+        setPlaybackStreamUrl(
+          buildVideoStreamUrl({
+            bvid: selectedVideo.bvid,
+            quality: playback.selected_quality_code,
+            cid: playback.cid || undefined,
+          }),
+        );
         setResolvedQualityLabel(playback.selected_quality_label);
         setResolvedQualityOptions(playback.qualities);
         if (playback.selected_quality_code !== selectedQualityCode) {

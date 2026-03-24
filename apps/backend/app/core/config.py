@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-5-mini"
     openai_reasoning_effort: str = "low"
-    crewai_enabled: bool = False
+    crewai_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",

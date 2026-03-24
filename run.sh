@@ -59,9 +59,9 @@ ensure_backend_setup() {
     printf '%s' "$current_hash" >"$BACKEND_STAMP"
   fi
 
-  local crewai_enabled="false"
-  if [[ -f "$BACKEND_DIR/.env" ]] && grep -q '^CREWAI_ENABLED=true' "$BACKEND_DIR/.env"; then
-    crewai_enabled="true"
+  local crewai_enabled="true"
+  if [[ -f "$BACKEND_DIR/.env" ]] && grep -q '^CREWAI_ENABLED=false' "$BACKEND_DIR/.env"; then
+    crewai_enabled="false"
   fi
 
   if [[ "$crewai_enabled" == "true" ]]; then

@@ -115,6 +115,18 @@ export async function getVideoPlayback(bvid: string, quality?: string, cid?: str
   return request<VideoPlaybackResponse>(`/api/videos/${bvid}/playback${suffix}`);
 }
 
+export function buildVideoStreamUrl(payload: {
+  bvid: string;
+  quality?: string;
+  cid?: string;
+}) {
+  const search = new URLSearchParams();
+  if (payload.quality) search.set("quality", payload.quality);
+  if (payload.cid) search.set("cid", payload.cid);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return `${browserBaseUrl}/api/videos/${encodeURIComponent(payload.bvid)}/stream${suffix}`;
+}
+
 export async function saveVideoPlaybackProgress(payload: {
   bvid: string;
   position_seconds: number;

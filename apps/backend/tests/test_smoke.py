@@ -259,6 +259,116 @@ def test_preferences_roundtrip() -> None:
         assert payload["download_output_dir"] == "./data/downloads"
 
 
+def test_curation_flow_uses_crewai_agents(monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("CREWAI_ENABLED", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5-mini")
+
+    install_stub_provider(monkeypatch)
+
+    import app.services.crewai_curation_service as crewai_module
+    from app.main import app
+
+    class FakeBaseLLM:
+        def __init__(
+            self,
+            *,
+            model: str,
+            temperature: float,
+            api_key: str,
+            base_url: str,
+            provider: str,
+        ) -> None:
+            self.model = model
+            self.temperature = temperature
+            self.api_key = api_key
+            self.base_url = base_url
+            self.provider = provider
+
+    class FakeAgent:
+        def __init__(self, **kwargs) -> None:
+            self.role = kwargs["role"]
+            self.goal = kwargs["goal"]
+            self.backstory = kwargs["backstory"]
+            self.verbose = kwargs["verbose"]
+            self.allow_delegation = kwargs["allow_delegation"]
+            self.max_iter = kwargs["max_iter"]
+            self.llm = kwargs["llm"]
+
+    class FakeTask:
+        def __init__(self, **kwargs) -> None:
+            self.description = kwargs["description"]
+            self.expected_output = kwargs["expected_output"]
+            self.agent = kwargs["agent"]
+            self.output_pydantic = kwargs["output_pydantic"]
+            self.output = None
+
+    class FakeCrewResult:
+        def __init__(self, model) -> None:
+            self.pydantic = model
+            self.raw = model.model_dump_json()
+
+    class FakeCrew:
+        def __init__(self, *, agents, tasks, process, verbose) -> None:
+            self.agents = agents
+            self.tasks = tasks
+            self.process = process
+            self.verbose = verbose
+
+        def kickoff(self):
+            task = self.tasks[0]
+            model_cls = task.output_pydantic
+            if model_cls.__name__ == "KeywordPlan":
+                model = model_cls(keywords=["python 架构", "python 工程化", "fastapi 实战"])
+            elif model_cls.__name__ == "ReviewPlan":
+                model = model_cls(
+                    decisions=[
+                        {"bvid": "BVREAL0000", "keep": True, "reason": "教程内容完整"},
+                        {"bvid": "BVREAL0001", "keep": False, "reason": "直播切片噪声"},
+                    ]
+                )
+            elif model_cls.__name__ == "CategoryPlan":
+                model = model_cls(items=[{"bvid": "BVREAL0000", "categories": ["Python", "后端"]}])
+            else:
+                raise AssertionError(f"unexpected CrewAI model: {model_cls.__name__}")
+
+            task.output = type("FakeTaskOutput", (), {"pydantic": model})()
+            return FakeCrewResult(model)
+
+    class FakeProcess:
+        sequential = "sequential"
+
+    monkeypatch.setattr(crewai_module, "BaseLLM", FakeBaseLLM)
+    monkeypatch.setattr(crewai_module, "CrewAIBaseLLM", FakeBaseLLM)
+    monkeypatch.setattr(crewai_module, "Agent", FakeAgent)
+    monkeypatch.setattr(crewai_module, "Task", FakeTask)
+    monkeypatch.setattr(crewai_module, "Crew", FakeCrew)
+    monkeypatch.setattr(crewai_module, "Process", FakeProcess)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/curation/run",
+            json={
+                "objective": "学习 Python 后端架构",
+                "extra_requirements": "只看教程，排除直播切片",
+                "max_keywords": 3,
+                "limit_per_keyword": 3,
+                "sync_accepted": True,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["recommended_keywords"] == ["python 架构", "python 工程化", "fastapi 实战"]
+    assert payload["accepted_count"] >= 1
+    assert payload["pipeline_trace"]["planner"]["agent"] == "crewai.keyword_planner"
+    assert payload["pipeline_trace"]["reviewer"]["agent"] == "crewai.content_reviewer"
+    assert payload["pipeline_trace"]["classifier"]["agent"] == "crewai.content_classifier"
+
+
 def test_playback_endpoint_returns_quality_specific_stream(monkeypatch) -> None:
     from fastapi.testclient import TestClient
 

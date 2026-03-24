@@ -181,13 +181,13 @@ docker-compose up --build
 DATABASE_URL=sqlite:///./data/bilifocus.db
 CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000
 
-LLM_REFINEMENT_ENABLED=false
+LLM_REFINEMENT_ENABLED=true
 LLM_PROVIDER=openai
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5-mini
 OPENAI_REASONING_EFFORT=low
 
-CREWAI_ENABLED=false
+CREWAI_ENABLED=true
 ```
 
 前端常用配置示例:
@@ -200,7 +200,7 @@ NEXT_PUBLIC_API_BASE_URL=/backend-api
 说明:
 
 - 不配置 LLM 也可以正常完成搜索、同步、片库浏览和 Cookie 管理
-- 配置了 LLM 后，可选增强搜索结果整理、分类与 curation 流程
+- 默认会尝试启用 CrewAI 多 agent 编排；如果未配置可用的 LLM 密钥，会自动回退到本地规则或兼容 adapter
 - Bilibili Cookie 可以手动粘贴，也可以在设置页中用二维码扫码回填
 
 ## 目录结构
@@ -256,10 +256,10 @@ APP_VERSION=0.1.0
 API_PREFIX=/api
 DATABASE_URL=sqlite:///./data/bilifocus.db
 CORS_ALLOW_ORIGINS=http://nas-ip:3000,https://app.your-domain.com
-LLM_REFINEMENT_ENABLED=false
+LLM_REFINEMENT_ENABLED=true
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5-mini
-CREWAI_ENABLED=false
+CREWAI_ENABLED=true
 ```
 
 前端 `apps/frontend/.env.local` 建议配置：

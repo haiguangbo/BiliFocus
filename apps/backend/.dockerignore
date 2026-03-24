@@ -1,4 +1,7 @@
 __pycache__
 *.pyc
+.env
+.venv
+.pytest_cache
 data
 tests/__pycache__
