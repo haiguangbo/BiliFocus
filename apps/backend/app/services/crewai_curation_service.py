@@ -15,6 +15,8 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     Agent = BaseLLM = Crew = Process = Task = None
 
+CrewAIBaseLLM = BaseLLM if BaseLLM is not None else object
+
 
 class KeywordPlan(BaseModel):
     keywords: list[str] = Field(default_factory=list)
@@ -39,8 +41,10 @@ class CategoryPlan(BaseModel):
     items: list[CategoryDecision] = Field(default_factory=list)
 
 
-class AdapterBackedCrewAILLM(BaseLLM):
+class AdapterBackedCrewAILLM(CrewAIBaseLLM):
     def __init__(self, settings: Settings) -> None:
+        if BaseLLM is None:
+            raise ValueError("CrewAI BaseLLM class is unavailable")
         super().__init__(
             model=settings.effective_llm_model,
             temperature=0.2,
