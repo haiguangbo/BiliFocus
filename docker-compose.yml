@@ -1,0 +1,24 @@
+services:
+  backend:
+    build:
+      context: ./apps/backend
+    container_name: bilifocus-backend
+    restart: unless-stopped
+    env_file:
+      - ./apps/backend/.env
+    expose:
+      - "8000"
+    volumes:
+      - ${BILIFOCUS_DATA_DIR:-./data}:/app/data
+
+  frontend:
+    build:
+      context: ./apps/frontend
+    container_name: bilifocus-frontend
+    restart: unless-stopped
+    ports:
+      - "${BILIFOCUS_FRONTEND_PORT:-3000}:3000"
+    env_file:
+      - ./apps/frontend/.env.local
+    depends_on:
+      - backend
