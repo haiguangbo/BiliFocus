@@ -4,7 +4,11 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+if BACKEND_ROOT.name == "backend" and BACKEND_ROOT.parent.name == "apps":
+    PROJECT_ROOT = BACKEND_ROOT.parent.parent
+else:
+    PROJECT_ROOT = BACKEND_ROOT
 
 
 class Settings(BaseSettings):
