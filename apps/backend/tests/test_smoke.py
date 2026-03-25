@@ -2,8 +2,11 @@ from datetime import UTC, datetime
 
 
 def install_stub_provider(monkeypatch) -> None:
+    from app.core.playback_source_cache import playback_source_cache
     from app.providers.factory import SearchProviderFactory
     from app.schemas.video import PlaybackQualityOption, PlaybackSource, RecommendationReason, VideoDetail, VideoItem
+
+    playback_source_cache.clear()
 
     class StubSearchProvider:
         def search(self, query: str, filter_text: str | None = None) -> list[VideoItem]:
@@ -121,6 +124,66 @@ def install_stub_provider(monkeypatch) -> None:
             return payload, 200, {"Content-Type": "video/mp4", "Accept-Ranges": "bytes"}
 
     monkeypatch.setattr(SearchProviderFactory, "resolve", lambda self, source: StubSearchProvider())
+
+
+def install_counting_playback_provider(monkeypatch, counters: dict[str, int]) -> None:
+    from app.core.playback_source_cache import playback_source_cache
+    from app.providers.factory import SearchProviderFactory
+    from app.schemas.video import PlaybackQualityOption, PlaybackSource, RecommendationReason, VideoDetail
+
+    playback_source_cache.clear()
+
+    class CountingPlaybackProvider:
+        def get_video(self, bvid: str) -> VideoDetail | None:
+            counters["get_video"] = counters.get("get_video", 0) + 1
+            if bvid != "BVREAL0000":
+                return None
+            return VideoDetail(
+                bvid=bvid,
+                title="python 教程实战",
+                author_name="BiliFocus",
+                duration_seconds=640,
+                published_at=datetime(2026, 3, 20, tzinfo=UTC),
+                view_count=12000,
+                like_count=680,
+                summary="真实 provider detail stub。",
+                tags=["real", "bilibili", "python", "教程"],
+                match_reasons=[RecommendationReason(code="keyword_match", message="标题命中关键词")],
+                cached=False,
+                description="真实 provider detail stub。",
+                source_url=f"https://www.bilibili.com/video/{bvid}",
+                sync_status="synced",
+                last_synced_at=datetime(2026, 3, 20, tzinfo=UTC),
+                raw_extra={"partition": "教程", "cid": "12345", "aid": "777"},
+            )
+
+        def get_playback_source(self, bvid: str, quality_code: str | None = None, cid: str | None = None) -> PlaybackSource | None:
+            counters["get_playback_source"] = counters.get("get_playback_source", 0) + 1
+            if bvid != "BVREAL0000":
+                return None
+            selected_quality = quality_code or "64"
+            return PlaybackSource(
+                bvid=bvid,
+                cid=cid or "12345",
+                selected_quality_code=selected_quality,
+                selected_quality_label="720P 高清" if selected_quality == "64" else "360P 流畅",
+                source_url=f"https://media.example.com/{bvid}/{selected_quality}.mp4",
+                qualities=[
+                    PlaybackQualityOption(code="64", label="720P 高清"),
+                    PlaybackQualityOption(code="16", label="360P 流畅"),
+                ],
+            )
+
+        def stream_playback_source(
+            self,
+            source: PlaybackSource,
+            range_header: str | None = None,
+        ) -> tuple[list[bytes], int, dict[str, str]]:
+            del range_header
+            counters["stream_playback_source"] = counters.get("stream_playback_source", 0) + 1
+            return [f"stream:{source.bvid}:{source.selected_quality_code}".encode("utf-8")], 200, {"Content-Type": "video/mp4"}
+
+    monkeypatch.setattr(SearchProviderFactory, "resolve", lambda self, source: CountingPlaybackProvider())
 
 
 def test_health_endpoint() -> None:
@@ -388,6 +451,27 @@ def test_playback_endpoint_returns_quality_specific_stream(monkeypatch) -> None:
         assert stream_response.status_code == 200
         assert stream_response.headers["content-type"].startswith("video/mp4")
         assert stream_response.content == b"stream:BVREAL0000:16"
+
+
+def test_playback_source_is_reused_between_playback_and_stream_requests(monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+
+    counters: dict[str, int] = {}
+    install_counting_playback_provider(monkeypatch, counters)
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        playback_response = client.get("/api/videos/BVREAL0000/playback?quality=16&cid=12345")
+        assert playback_response.status_code == 200
+
+        stream_response = client.get("/api/videos/BVREAL0000/stream?quality=16&cid=12345")
+        assert stream_response.status_code == 200
+        assert stream_response.content == b"stream:BVREAL0000:16"
+
+    assert counters["get_playback_source"] == 1
+    assert counters["stream_playback_source"] == 1
+    assert counters.get("get_video", 0) == 0
 
 
 def test_playback_progress_endpoint_updates_local_record(monkeypatch) -> None:

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { buildVideoStreamUrl, getVideoPlayback, saveVideoPlaybackProgress } from "@/lib/api";
+import { getVideoPlayback, saveVideoPlaybackProgress } from "@/lib/api";
 import { RecommendationReason } from "@/types/api";
 
 export type CleanPlayerPlaylistEntry = {
@@ -67,6 +67,7 @@ export function CleanPlayerShell({
     lastPlayedAt: rawExtra.playback_last_played_at || "",
   });
   const [selectedQualityCode, setSelectedQualityCode] = useState("");
+  const [appliedQualityCode, setAppliedQualityCode] = useState("");
   const [playbackStreamUrl, setPlaybackStreamUrl] = useState<string | null>(null);
   const [resolvedQualityLabel, setResolvedQualityLabel] = useState(bestQuality ?? "");
   const [resolvedQualityOptions, setResolvedQualityOptions] = useState<{ code: string; label: string }[]>(
@@ -126,6 +127,7 @@ export function CleanPlayerShell({
 
   useEffect(() => {
     setSelectedQualityCode("");
+    setAppliedQualityCode("");
     setPlaybackStreamUrl(null);
     setPlayerError(null);
     setProgressState({
@@ -165,18 +167,10 @@ export function CleanPlayerShell({
         if (cancelled) {
           return;
         }
-        setPlaybackStreamUrl(
-          buildVideoStreamUrl({
-            bvid: selectedVideo.bvid,
-            quality: playback.selected_quality_code,
-            cid: playback.cid || undefined,
-          }),
-        );
+        setPlaybackStreamUrl(playback.stream_url);
         setResolvedQualityLabel(playback.selected_quality_label);
         setResolvedQualityOptions(playback.qualities);
-        if (playback.selected_quality_code !== selectedQualityCode) {
-          setSelectedQualityCode(playback.selected_quality_code);
-        }
+        setAppliedQualityCode(playback.selected_quality_code);
       } catch (error) {
         if (cancelled) {
           return;
@@ -373,7 +367,7 @@ export function CleanPlayerShell({
                   <button
                     key={option.code}
                     className={`rounded-full border px-3 py-1.5 text-xs ${
-                      selectedQualityCode === option.code
+                      (selectedQualityCode || appliedQualityCode) === option.code
                         ? "border-blue-200 bg-blue-50 text-blue-700"
                         : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
                     }`}

@@ -1,6 +1,7 @@
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
+from app.core.playback_source_cache import playback_source_cache
 from app.providers.base import ProviderUnavailableError
 from app.providers.factory import SearchProviderFactory
 from app.repositories.video_repository import VideoRepository
@@ -123,8 +124,14 @@ class VideoService:
         quality_code: str | None = None,
         cid: str | None = None,
     ) -> PlaybackSource | None:
+        cached = playback_source_cache.get(bvid=bvid, quality_code=quality_code, cid=cid)
+        if cached is not None:
+            return cached
         provider = self.provider_factory.resolve("default")
-        return provider.get_playback_source(bvid, quality_code=quality_code, cid=cid)
+        source = provider.get_playback_source(bvid, quality_code=quality_code, cid=cid)
+        if source is None:
+            return None
+        return playback_source_cache.set(source)
 
     def stream_video(
         self,
@@ -134,10 +141,13 @@ class VideoService:
         cid: str | None = None,
         range_header: str | None = None,
     ) -> tuple[Iterable[bytes], int, dict[str, str]] | None:
+        source = playback_source_cache.get(bvid=bvid, quality_code=quality_code, cid=cid)
         provider = self.provider_factory.resolve("default")
-        source = provider.get_playback_source(bvid, quality_code=quality_code, cid=cid)
         if source is None:
-            return None
+            source = provider.get_playback_source(bvid, quality_code=quality_code, cid=cid)
+            if source is None:
+                return None
+            playback_source_cache.set(source)
         return provider.stream_playback_source(source, range_header=range_header)
 
     def record_playback_progress(

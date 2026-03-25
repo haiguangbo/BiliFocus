@@ -216,10 +216,6 @@ def stream_video(
     normalized_headers = {key.lower(): value for key, value in upstream_headers.items()}
     media_type = normalized_headers.get("content-type", "video/mp4")
     response_headers: dict[str, str] = {"Cache-Control": "no-store"}
-    try:
-        detail = service.get_video(bvid)
-    except ProviderUnavailableError:
-        detail = None
     if "content-length" in normalized_headers:
         response_headers["Content-Length"] = normalized_headers["content-length"]
     if "content-range" in normalized_headers:
@@ -227,7 +223,7 @@ def stream_video(
     if "accept-ranges" in normalized_headers:
         response_headers["Accept-Ranges"] = normalized_headers["accept-ranges"]
     filename = build_download_filename(
-        detail.title if detail else bvid,
+        bvid,
         quality,
     )
     response_headers["Content-Disposition"] = f"inline; filename*=UTF-8''{quote(filename)}"
