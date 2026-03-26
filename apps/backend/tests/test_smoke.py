@@ -1,6 +1,24 @@
 from datetime import UTC, datetime
 
 
+class _StubHTTPResponse:
+    def __init__(self, body: bytes, *, status: int = 200, headers: dict[str, str] | None = None) -> None:
+        self._body = body
+        self._cursor = 0
+        self.status = status
+        self.headers = headers or {}
+
+    def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            size = len(self._body) - self._cursor
+        chunk = self._body[self._cursor:self._cursor + size]
+        self._cursor += len(chunk)
+        return chunk
+
+    def close(self) -> None:
+        return None
+
+
 def install_stub_provider(monkeypatch) -> None:
     from app.core.playback_source_cache import playback_source_cache
     from app.providers.factory import SearchProviderFactory
@@ -184,6 +202,117 @@ def install_counting_playback_provider(monkeypatch, counters: dict[str, int]) ->
             return [f"stream:{source.bvid}:{source.selected_quality_code}".encode("utf-8")], 200, {"Content-Type": "video/mp4"}
 
     monkeypatch.setattr(SearchProviderFactory, "resolve", lambda self, source: CountingPlaybackProvider())
+
+
+def test_bilibili_provider_streams_multi_segment_source() -> None:
+    from app.providers.bilibili_web import BilibiliWebSearchProvider
+    from app.schemas.video import PlaybackSegment, PlaybackSource
+
+    provider = BilibiliWebSearchProvider(
+        api_base_url="https://api.bilibili.com",
+        referer="https://www.bilibili.com",
+        user_agent="test-agent",
+        timeout_seconds=3,
+        page_size=20,
+    )
+
+    payloads = {
+        "https://media.example.com/seg-1.mp4": b"hello ",
+        "https://media.example.com/seg-2.mp4": b"world",
+    }
+
+    def fake_open_stream(url: str, *, range_header: str | None = None):
+        assert range_header is None
+        return _StubHTTPResponse(
+            payloads[url],
+            headers={"Content-Type": "video/mp4", "Content-Length": str(len(payloads[url]))},
+        )
+
+    provider._open_stream = fake_open_stream  # type: ignore[method-assign]
+    source = PlaybackSource(
+        bvid="BVSEG0001",
+        cid="123",
+        selected_quality_code="64",
+        selected_quality_label="720P 高清",
+        source_url="https://media.example.com/seg-1.mp4",
+        segments=[
+            PlaybackSegment(url="https://media.example.com/seg-1.mp4", size=6),
+            PlaybackSegment(url="https://media.example.com/seg-2.mp4", size=5),
+        ],
+        total_size=11,
+    )
+
+    stream, status_code, headers = provider.stream_playback_source(source)
+
+    assert status_code == 200
+    assert headers["Content-Length"] == "11"
+    assert headers["Accept-Ranges"] == "bytes"
+    assert b"".join(stream) == b"hello world"
+
+
+def test_bilibili_provider_maps_range_requests_across_segments() -> None:
+    from app.providers.bilibili_web import BilibiliWebSearchProvider
+    from app.schemas.video import PlaybackSegment, PlaybackSource
+
+    provider = BilibiliWebSearchProvider(
+        api_base_url="https://api.bilibili.com",
+        referer="https://www.bilibili.com",
+        user_agent="test-agent",
+        timeout_seconds=3,
+        page_size=20,
+    )
+
+    payloads = {
+        "https://media.example.com/seg-1.mp4": b"hello ",
+        "https://media.example.com/seg-2.mp4": b"world",
+    }
+    requested_ranges: list[tuple[str, str | None]] = []
+
+    def fake_open_stream(url: str, *, range_header: str | None = None):
+        requested_ranges.append((url, range_header))
+        body = payloads[url]
+        if range_header is None:
+            return _StubHTTPResponse(body, headers={"Content-Type": "video/mp4", "Content-Length": str(len(body))})
+        _, value = range_header.split("=", 1)
+        start_text, end_text = value.split("-", 1)
+        start = int(start_text)
+        end = int(end_text)
+        chunk = body[start:end + 1]
+        return _StubHTTPResponse(
+            chunk,
+            status=206,
+            headers={
+                "Content-Type": "video/mp4",
+                "Content-Length": str(len(chunk)),
+                "Content-Range": f"bytes {start}-{end}/{len(body)}",
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    provider._open_stream = fake_open_stream  # type: ignore[method-assign]
+    source = PlaybackSource(
+        bvid="BVSEG0002",
+        cid="123",
+        selected_quality_code="64",
+        selected_quality_label="720P 高清",
+        source_url="https://media.example.com/seg-1.mp4",
+        segments=[
+            PlaybackSegment(url="https://media.example.com/seg-1.mp4", size=6),
+            PlaybackSegment(url="https://media.example.com/seg-2.mp4", size=5),
+        ],
+        total_size=11,
+    )
+
+    stream, status_code, headers = provider.stream_playback_source(source, range_header="bytes=4-8")
+
+    assert status_code == 206
+    assert headers["Content-Length"] == "5"
+    assert headers["Content-Range"] == "bytes 4-8/11"
+    assert b"".join(stream) == b"o wor"
+    assert requested_ranges == [
+        ("https://media.example.com/seg-1.mp4", "bytes=4-5"),
+        ("https://media.example.com/seg-2.mp4", "bytes=0-2"),
+    ]
 
 
 def test_health_endpoint() -> None:

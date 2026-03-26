@@ -46,12 +46,19 @@ class PlaybackQualityOption(BaseModel):
     label: str
 
 
+class PlaybackSegment(BaseModel):
+    url: str
+    size: int | None = None
+
+
 class PlaybackSource(BaseModel):
     bvid: str
     cid: str
     selected_quality_code: str
     selected_quality_label: str
     source_url: str
+    segments: list[PlaybackSegment] = Field(default_factory=list)
+    total_size: int | None = None
     qualities: list[PlaybackQualityOption] = Field(default_factory=list)
 
 

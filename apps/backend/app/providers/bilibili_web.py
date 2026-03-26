@@ -2,6 +2,7 @@ import html
 import json
 import re
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from hashlib import md5
 from http.cookiejar import CookieJar
@@ -11,7 +12,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 from app.providers.base import ProviderUnavailableError
-from app.schemas.video import PlaybackQualityOption, PlaybackSource, RecommendationReason, VideoDetail, VideoItem
+from app.schemas.video import PlaybackQualityOption, PlaybackSegment, PlaybackSource, RecommendationReason, VideoDetail, VideoItem
 
 
 class BilibiliWebSearchProvider:
@@ -126,8 +127,17 @@ class BilibiliWebSearchProvider:
         if not durl:
             return None
 
-        url = durl[0].get("url")
-        if not isinstance(url, str) or not url:
+        segments: list[PlaybackSegment] = []
+        for entry in durl:
+            if not isinstance(entry, dict):
+                continue
+            url = entry.get("url")
+            if not isinstance(url, str) or not url:
+                continue
+            size = entry.get("size")
+            normalized_size = int(size) if isinstance(size, int) and size > 0 else None
+            segments.append(PlaybackSegment(url=url, size=normalized_size))
+        if not segments:
             return None
 
         accept_quality = data.get("accept_quality") if isinstance(data.get("accept_quality"), list) else []
@@ -143,7 +153,9 @@ class BilibiliWebSearchProvider:
             cid=str(resolved_cid),
             selected_quality_code=selected_quality,
             selected_quality_label=self._match_quality_label(selected_quality, accept_quality, accept_description),
-            source_url=url,
+            source_url=segments[0].url,
+            segments=segments,
+            total_size=sum(segment.size for segment in segments if segment.size is not None) if all(segment.size is not None for segment in segments) else None,
             qualities=qualities,
         )
 
@@ -151,33 +163,141 @@ class BilibiliWebSearchProvider:
         self,
         source: PlaybackSource,
         range_header: str | None = None,
-    ) -> tuple[object, int, dict[str, str]]:
-        request = Request(source.source_url, headers=self._build_headers(accept="video/*,*/*"))
-        if range_header:
-            request.add_header("Range", range_header)
-        try:
-            response = self.opener.open(request, timeout=self.timeout_seconds)
-        except (HTTPError, URLError, TimeoutError) as exc:
-            raise ProviderUnavailableError("bilibili playback stream request failed") from exc
+    ) -> tuple[Iterable[bytes], int, dict[str, str]]:
+        segments = source.segments or [PlaybackSegment(url=source.source_url, size=source.total_size)]
+        if len(segments) == 1:
+            return self._stream_single_segment(segments[0].url, range_header=range_header)
+        if source.total_size is None:
+            return self._stream_segment_sequence(segments)
 
+        byte_range = self._parse_range_header(range_header, total_size=source.total_size)
+        if byte_range is None:
+            return self._stream_segment_sequence(segments, total_size=source.total_size)
+        return self._stream_segment_range(segments, byte_range=byte_range, total_size=source.total_size)
+
+    def _stream_single_segment(
+        self,
+        url: str,
+        *,
+        range_header: str | None = None,
+    ) -> tuple[Iterable[bytes], int, dict[str, str]]:
+        response = self._open_stream(url, range_header=range_header)
         status_code = getattr(response, "status", 200)
         headers = {
             key: value
             for key, value in response.headers.items()
             if key.lower() in {"content-type", "content-length", "content-range", "accept-ranges"}
         }
+        return self._iter_response(response), status_code, headers
 
-        def iterator():
-            try:
-                while True:
-                    chunk = response.read(1024 * 128)
-                    if not chunk:
-                        break
-                    yield chunk
-            finally:
-                response.close()
+    def _stream_segment_sequence(
+        self,
+        segments: list[PlaybackSegment],
+        *,
+        total_size: int | None = None,
+    ) -> tuple[Iterable[bytes], int, dict[str, str]]:
+        first_response = self._open_stream(segments[0].url)
+        content_type = first_response.headers.get("Content-Type", "video/mp4")
 
-        return iterator(), status_code, headers
+        def iterator() -> Iterable[bytes]:
+            yield from self._iter_response(first_response)
+            for segment in segments[1:]:
+                response = self._open_stream(segment.url)
+                yield from self._iter_response(response)
+
+        headers = {"Content-Type": content_type}
+        if total_size is not None:
+            headers["Content-Length"] = str(total_size)
+            headers["Accept-Ranges"] = "bytes"
+        return iterator(), 200, headers
+
+    def _stream_segment_range(
+        self,
+        segments: list[PlaybackSegment],
+        *,
+        byte_range: tuple[int, int],
+        total_size: int,
+    ) -> tuple[Iterable[bytes], int, dict[str, str]]:
+        start, end = byte_range
+        segment_requests: list[tuple[str, str]] = []
+        offset = 0
+        for segment in segments:
+            segment_size = segment.size or 0
+            segment_start = offset
+            segment_end = offset + max(segment_size - 1, 0)
+            if segment_size <= 0 or end < segment_start:
+                break
+            if start <= segment_end and end >= segment_start:
+                local_start = max(start, segment_start) - segment_start
+                local_end = min(end, segment_end) - segment_start
+                segment_requests.append((segment.url, f"bytes={local_start}-{local_end}"))
+            offset += segment_size
+
+        if not segment_requests:
+            raise ProviderUnavailableError("requested playback range is unavailable")
+
+        first_response = self._open_stream(segment_requests[0][0], range_header=segment_requests[0][1])
+        content_type = first_response.headers.get("Content-Type", "video/mp4")
+
+        def iterator() -> Iterable[bytes]:
+            yield from self._iter_response(first_response)
+            for url, local_range in segment_requests[1:]:
+                response = self._open_stream(url, range_header=local_range)
+                yield from self._iter_response(response)
+
+        headers = {
+            "Content-Type": content_type,
+            "Content-Length": str(end - start + 1),
+            "Content-Range": f"bytes {start}-{end}/{total_size}",
+            "Accept-Ranges": "bytes",
+        }
+        return iterator(), 206, headers
+
+    def _open_stream(self, url: str, *, range_header: str | None = None):
+        request = Request(url, headers=self._build_headers(accept="video/*,*/*"))
+        if range_header:
+            request.add_header("Range", range_header)
+        try:
+            return self.opener.open(request, timeout=self.timeout_seconds)
+        except (HTTPError, URLError, TimeoutError) as exc:
+            raise ProviderUnavailableError("bilibili playback stream request failed") from exc
+
+    def _iter_response(self, response) -> Iterable[bytes]:
+        try:
+            while True:
+                chunk = response.read(1024 * 128)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            response.close()
+
+    def _parse_range_header(self, range_header: str | None, *, total_size: int) -> tuple[int, int] | None:
+        if not range_header:
+            return None
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+        if match is None:
+            return None
+
+        raw_start, raw_end = match.groups()
+        if raw_start and raw_end:
+            start = int(raw_start)
+            end = int(raw_end)
+        elif raw_start:
+            start = int(raw_start)
+            end = total_size - 1
+        elif raw_end:
+            suffix_length = int(raw_end)
+            if suffix_length <= 0:
+                return None
+            start = max(total_size - suffix_length, 0)
+            end = total_size - 1
+        else:
+            return None
+
+        if start < 0 or start >= total_size or end < start:
+            return None
+        return start, min(end, total_size - 1)
 
     def _to_video_item(self, item: dict, query: str) -> VideoItem:
         published_at = None
