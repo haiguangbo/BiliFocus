@@ -9,6 +9,16 @@ from app.models.video import Video
 from app.models.video_metric import VideoMetric
 from app.schemas.video import RecommendationReason, VideoDetail, VideoItem
 
+_SERIES_PATTERNS = [
+    re.compile(r"第\s*\d+\s*[季集话]", re.IGNORECASE),
+    re.compile(r"(?:ep|episode|e)\s*\d+", re.IGNORECASE),
+    re.compile(r"\d+\s*连播", re.IGNORECASE),
+    re.compile(r"\d+\s*集", re.IGNORECASE),
+]
+_NORMALIZE_SERIES_KEY_PATTERN = re.compile(r"[^0-9a-z\u4e00-\u9fff]+")
+_DASH_MULTI_PATTERN = re.compile(r"-{2,}")
+_SEMANTIC_QUERY_SPLIT_PATTERN = re.compile(r"[\s,，、;；|/]+")
+
 
 class VideoRepository:
     def __init__(self, db: Session) -> None:
@@ -285,20 +295,15 @@ class VideoRepository:
             .replace("】", " ")
         )
         normalized = json.loads(json.dumps(normalized, ensure_ascii=False))
-        for pattern in [
-            r"第\s*\d+\s*[季集话]",
-            r"(?:ep|episode|e)\s*\d+",
-            r"\d+\s*连播",
-            r"\d+\s*集",
-        ]:
-            normalized = re.sub(pattern, "", normalized, flags=re.IGNORECASE)
+        for pattern in _SERIES_PATTERNS:
+            normalized = pattern.sub("", normalized)
         normalized = " ".join(normalized.split()).strip(" -_")
         return normalized[:80] or title[:80]
 
     def _slugify_series_key(self, title: str) -> str:
         lowered = title.lower().strip()
-        lowered = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "-", lowered)
-        lowered = re.sub(r"-{2,}", "-", lowered).strip("-")
+        lowered = _NORMALIZE_SERIES_KEY_PATTERN.sub("-", lowered)
+        lowered = _DASH_MULTI_PATTERN.sub("-", lowered).strip("-")
         return lowered[:96]
 
     def _build_semantic_query_groups(self, query: str) -> list[str]:
@@ -307,7 +312,7 @@ class VideoRepository:
         if normalized:
             groups.append(normalized)
 
-        for token in re.split(r"[\s,，、;；|/]+", normalized):
+        for token in _SEMANTIC_QUERY_SPLIT_PATTERN.split(normalized):
             token = token.strip()
             if not token or len(token) < 2:
                 continue

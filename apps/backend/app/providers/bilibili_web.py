@@ -14,6 +14,13 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 from app.providers.base import ProviderUnavailableError
 from app.schemas.video import PlaybackQualityOption, PlaybackSegment, PlaybackSource, RecommendationReason, VideoDetail, VideoItem
 
+from threading import Lock
+from time import monotonic
+
+_WBI_KEYS_CACHE: tuple[str, str] | None = None
+_WBI_KEYS_EXPIRES_AT: float = 0
+_WBI_KEYS_LOCK = Lock()
+
 
 class BilibiliWebSearchProvider:
     _MIXIN_KEY_ENC_TAB = [
@@ -519,6 +526,11 @@ class BilibiliWebSearchProvider:
         return urlencode(request_params)
 
     def _get_wbi_keys(self) -> tuple[str, str]:
+        global _WBI_KEYS_CACHE, _WBI_KEYS_EXPIRES_AT
+        now = monotonic()
+        with _WBI_KEYS_LOCK:
+            if _WBI_KEYS_CACHE and _WBI_KEYS_EXPIRES_AT > now:
+                return _WBI_KEYS_CACHE
         payload = self._request_json(f"{self.api_base_url}/x/web-interface/nav")
         data = payload.get("data", {})
         wbi_img = data.get("wbi_img", {}) if isinstance(data, dict) else {}
@@ -528,6 +540,9 @@ class BilibiliWebSearchProvider:
         sub_key = self._extract_wbi_key(sub_url)
         if not img_key or not sub_key:
             raise ProviderUnavailableError("bilibili nav did not return wbi keys")
+        with _WBI_KEYS_LOCK:
+            _WBI_KEYS_CACHE = (img_key, sub_key)
+            _WBI_KEYS_EXPIRES_AT = now + 4 * 3600
         return img_key, sub_key
 
     def _extract_wbi_key(self, value: object) -> str | None:

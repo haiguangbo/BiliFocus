@@ -7,7 +7,7 @@ from time import monotonic
 from app.schemas.video import PlaybackSource
 
 
-_PLAYBACK_SOURCE_TTL_SECONDS = 30.0
+_PLAYBACK_SOURCE_TTL_SECONDS = 300.0
 
 
 @dataclass(slots=True)

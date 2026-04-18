@@ -1,3 +1,5 @@
+import re
+
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
@@ -15,6 +17,14 @@ from app.schemas.video import (
     VideoPlaybackProgressResponse,
 )
 from app.services.download_service import DownloadService
+
+_SERIES_PATTERNS = [
+    re.compile(r"第\s*\d+\s*[季集话]", re.IGNORECASE),
+    re.compile(r"(?:ep|episode|e)\s*\d+", re.IGNORECASE),
+    re.compile(r"\d+\s*集", re.IGNORECASE),
+    re.compile(r"\d+\s*连播", re.IGNORECASE),
+]
+_NORMALIZE_SERIES_KEY_PATTERN = re.compile(r"[^0-9a-z\u4e00-\u9fff]+")
 
 
 class VideoService:
@@ -203,13 +213,9 @@ class VideoService:
         normalized = title
         for token in ["【", "】", "(", ")", "（", "）"]:
             normalized = normalized.replace(token, " ")
-        for pattern in [r"第\s*\d+\s*[季集话]", r"(?:ep|episode|e)\s*\d+", r"\d+\s*集", r"\d+\s*连播"]:
-            import re
-
-            normalized = re.sub(pattern, "", normalized, flags=re.IGNORECASE)
+        for pattern in _SERIES_PATTERNS:
+            normalized = pattern.sub("", normalized)
         return " ".join(normalized.split()).strip() or title
 
     def _normalize_series_key(self, value: str) -> str:
-        import re
-
-        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", value.lower())
+        return _NORMALIZE_SERIES_KEY_PATTERN.sub("", value.lower())
