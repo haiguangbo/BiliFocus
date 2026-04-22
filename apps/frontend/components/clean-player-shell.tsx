@@ -337,7 +337,7 @@ export function CleanPlayerShell({
                   }));
                 }}
                 playsInline
-                preload="metadata"
+                preload="auto"
                 src={playbackStreamUrl}
               />
             ) : playerLoading ? (
